@@ -1,5 +1,4 @@
 #include <X11/Xlib.h>
-#include <locale.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -84,7 +83,6 @@ static void handle_property_notify(XPropertyEvent *ev) {
 }
 
 int main(int argc, char **argv) {
-  setlocale(LC_ALL, "");
   int scr;
 
   dpy = XOpenDisplay(NULL);
