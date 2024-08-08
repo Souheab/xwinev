@@ -6,9 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 
 Display *dpy;
 Window root;
+volatile sig_atomic_t running = 1;
 
 static void log_fatalf(const char *str, ...) {
   va_list args;
@@ -35,6 +37,11 @@ static void log_warn_f(const char *str, ...) {
   va_end(args);
 }
 
+static void sigint_handler(int signum) {
+  running = 0;
+  log_f("Received SIGINT. Exiting...\n");
+}
+
 static int error_handler(Display *dpy, XErrorEvent *ev) {
   char error_text[256];
   XGetErrorText(dpy, ev->error_code, error_text, sizeof(error_text));
@@ -44,11 +51,40 @@ static int error_handler(Display *dpy, XErrorEvent *ev) {
   return 0;
 }
 
+static void handle_create_notify(XCreateWindowEvent *ev) {
+  log_f("Window created: 0x%lx\n", ev->window);
+}
+
+static void handle_destroy_notify(XDestroyWindowEvent *ev) {
+  log_f("Window destroyed: 0x%lx\n", ev->window);
+}
+
+static void handle_configure_notify(XConfigureEvent *ev) {
+  log_f("Window 0x%lx configured: pos(%d, %d), size(%d, %d)\n", ev->window,
+        ev->x, ev->y, ev->width, ev->height);
+}
+
+static void handle_map_notify(XMapEvent *ev) {
+  log_f("Window mapped: 0x%lx\n", ev->window);
+}
+
+static void handle_unmap_notify(XUnmapEvent *ev) {
+  log_f("Window unmapped: 0x%lx\n", ev->window);
+}
+
+static void handle_expose(XExposeEvent *ev) {
+  log_f("Window 0x%lx exposed: pos(%d, %d), size(%d, %d)\n", ev->window, ev->x,
+        ev->y, ev->width, ev->height);
+}
+
+static void handle_property_notify(XPropertyEvent *ev) {
+  log_f("PropertyNotify for window 0x%lx: atom %lu, time %lu, state %s\n",
+        ev->window, ev->atom, ev->time,
+        (ev->state == PropertyNewValue) ? "NewValue" : "Deleted");
+}
+
 int main(int argc, char **argv) {
   setlocale(LC_ALL, "");
-  Window root_return, parent_return;
-  Window *children;
-  unsigned int nchildren;
   int scr;
 
   dpy = XOpenDisplay(NULL);
@@ -57,6 +93,12 @@ int main(int argc, char **argv) {
     log_fatalf("Failed to open X11 display\n");
   } else {
     log_f("Opened X11 display: %s\n", DisplayString(dpy));
+  }
+
+  struct sigaction sa;
+  sa.sa_handler = sigint_handler;
+  if (sigaction(SIGINT, &sa, NULL) == -1) {
+    log_fatalf("Failed to set up SIGINT handler\n");
   }
 
   scr = DefaultScreen(dpy);
@@ -70,27 +112,45 @@ int main(int argc, char **argv) {
                StructureNotifyMask |
                PropertyChangeMask);
 
-  XQueryTree(dpy, root, &root_return, &parent_return, &children, &nchildren);
   XEvent ev;
-  bool compositing_done = false;
-  while (XPending(dpy)) {
-    XNextEvent(dpy, &ev);
-    compositing_done = false;
-    switch (ev.type) {
-    case CreateNotify:
-      break;
-    case DestroyNotify:
-      break;
-    case ConfigureNotify:
-      break;
-    case MapNotify:
-      break;
-    case UnmapNotify:
-      break;
-    case Expose:
-    default:
-      break;
+  bool event_processed = false;
+
+  while (running) {
+    if (XPending(dpy)) {
+      XNextEvent(dpy, &ev);
+      event_processed = false;
     }
+
+    if (!event_processed) {
+      switch (ev.type) {
+      case CreateNotify:
+        handle_create_notify(&ev.xcreatewindow);
+        break;
+      case DestroyNotify:
+        handle_destroy_notify(&ev.xdestroywindow);
+        break;
+      case ConfigureNotify:
+        handle_configure_notify(&ev.xconfigure);
+        break;
+      case MapNotify:
+        handle_map_notify(&ev.xmap);
+        break;
+      case UnmapNotify:
+        handle_unmap_notify(&ev.xunmap);
+        break;
+      case Expose:
+        handle_expose(&ev.xexpose);
+        break;
+      case PropertyNotify:
+        handle_property_notify(&ev.xproperty);
+        break;
+      default:
+        log_f("Unhandled event type: %d\n", ev.type);
+        break;
+      }
+    }
+
+    event_processed = true;
   }
 
   XCloseDisplay(dpy);
